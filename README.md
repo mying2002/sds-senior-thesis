@@ -1,7 +1,9 @@
 # A Network Approach for Identifying Convergent Antibody Responses in SARS-CoV-2 Patients
 
 Michael Ying
+
 S&DS 491 Senior Thesis
+
 Advised by Gisela Gabernet and Steven Kleinstein
 
 ## Usage
