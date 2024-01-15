@@ -36,11 +36,3 @@ def levenshtein_distance_norm(str1, str2, weights=(1,1,2), edge_cutoff=None):
 
     return leven_dist 
 
-
-
-# takes in aa_weights_dict (MAYBE WANT 2D DF?) to represent custom weights for certain replacements
-# should be relative to 1 for an insertion/deletion
-def edit_distance_weighted(str1, str2, aa_replacement_dict):
-    # want minimum distance in DP
-
-    return

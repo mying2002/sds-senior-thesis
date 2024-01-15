@@ -35,9 +35,7 @@ def extract_data(data_directory, set_name=None, save_directory=None, file_filter
         # select columns - WARNING: may give errors for new data sets with different column names; can pass into func later
         if keep_columns is not None:
             file_data = file_data[keep_columns]
-        # file_data = file_data[["sequence_id", "sample_id", "subject_id", "clone_id", "v_call", "j_call", "junction_aa", "junction_length", "locus"]]
-
-        # print(file_data.head())
+        # file_data = file_data[["sequence_id", "sample_id", "subject_id", "clone_id", "v_call", "j_call", "junction_aa", "junction_length", "locus"]] # manual
 
         # print(np.unique(file_data["study_group_description"])) # all control data points have "Control" in the name
 
@@ -48,13 +46,10 @@ def extract_data(data_directory, set_name=None, save_directory=None, file_filter
 
                 if type == "str_contains":
                     file_data = file_data[file_data[col].str.contains(value)]
-                
-                # print(file_data.head())
 
         # concatenate to full data DF
         full_data = pd.concat([full_data, file_data])
 
-        # break
 
     # ----- save file if argument is provided ----- #
     if save_directory != None:
@@ -90,8 +85,6 @@ def process_data(full_data, set_name=None, save_directory=None, data_filter_tupl
     
     print(f"shape after filter IGH locus and IGHV1-58 v-call: {filtered_data.shape}")
 
-    # print(filtered_data.shape)
-
     # - v_call normalize
     # NOTE: currently using all IGHV1-58; in the future, can change this to be similar to j_call methodology
     filtered_data["v_call"] = "IGHV1-58"
@@ -116,8 +109,6 @@ def process_data(full_data, set_name=None, save_directory=None, data_filter_tupl
 
     print(f"shape after removing subjects with <10 (unique) sequences: {filtered_data.shape}")
 
-
-    # print(filtered_data.shape)
 
     # - select certain list of subjects, etc.
     # filter_list = []
@@ -179,7 +170,7 @@ def process_annotated_data(file_path):
     filtered_cov_data = filtered_cov_data.drop_duplicates(['Heavy V Gene', 'Heavy J Gene', 'CDRH3']) # 100 sequences
 
     # set of sequences
-    cov_CDRH3 = set(filtered_cov_data["CDRH3"])
+    # cov_CDRH3 = set(filtered_cov_data["CDRH3"]) # unused for now
 
     return filtered_cov_data
 
