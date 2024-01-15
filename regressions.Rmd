@@ -1,0 +1,651 @@
+---
+title: "Senior Thesis Regressions"
+output: html_document
+date: "2023-12-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)    # dplyr
+library(corrplot)     # correlation plot
+library(car)          # vif()
+library(boot)         # glm.plots()
+library(glmnet)       # regularized glm
+library(pubtheme)     # plotting
+# library(orgthemes)    # ?
+
+```
+
+## Read in data
+
+```{r read in data}
+# raw_df = read.csv("raw_community_data.csv")
+# processed_df = read.csv("community_data_processed.csv")
+
+raw_df = read.csv("alt_raw_community_data.csv")
+processed_df = read.csv("alt_community_data_processed.csv")
+new_processed_df = read.csv("newest_community_data_processed.csv")
+
+data = processed_df %>%
+  select(-X, -close_annotated_sequences.35, 
+         -n_close_annotated_sequences.35, -has_close_annotated_sequence.35) 
+
+new_data = new_processed_df %>%
+  select(-X, -has_close_annotated_sequence0.2, -n_close_annotated_sequences0.2)
+
+```
+
+```{r check colnames}
+colnames(new_processed_df)
+
+```
+
+```{r basic data stats}
+processed_df_stats = new_processed_df %>%
+  group_by(resolution) %>%
+  summarise(n_clusters = n(),
+            n_nodes = sum(size)
+            )
+
+head(processed_df_stats)
+```
+
+### [DEPRECATED] Check wilcoxon rank sum test results
+
+```{r [DEPRECATED] wilcoxon}
+wilcoxon_data = data %>%
+  select(community_id, resolution, 
+         log10size, 
+         mean_lisi, inverse_simpsons_index,
+         average_degree, average_clustering, 
+         prop_patient,
+         has_close_annotated_sequence0.2)
+
+temp = c(1.0)
+for (res in unique(wilcoxon_data$resolution)){
+# for (res in temp){
+  filtered_data = wilcoxon_data %>%
+    filter(resolution == res)
+  
+  pos_data = filtered_data %>%
+    filter(has_close_annotated_sequence0.2 == 1.0)
+  
+  neg_data = filtered_data %>%
+    filter(has_close_annotated_sequence0.2 == 0.0)
+  
+  # print(colnames(pos_data))
+  
+  # vars_data = wilcoxon_data %>%
+  #   select(-community_id, -resolution, -has_close_annotated_sequence0.2)
+  # var_names = colnames(vars_data)
+  # for (var in var_names){
+  #   print(var)
+  #   print(pos_data$var)
+  #   print(neg_data$var)
+  #   print(wilcox.test(pos_data$var, neg_data$var, alternative = "less"))
+  # }
+  
+  # manual
+  print(res)
+  # print(wilcox.test(pos_data$log10size, neg_data$log10size, alternative = "greater"))
+  print(wilcox.test(pos_data$mean_lisi, neg_data$mean_lisi, alternative = "greater"))
+  # print(wilcox.test(pos_data$inverse_simpsons_index, neg_data$inverse_simpsons_index, alternative = "greater"))
+  # print(wilcox.test(pos_data$average_degree, neg_data$average_degree, alternative = "greater"))
+  # print(wilcox.test(pos_data$average_clustering, neg_data$average_clustering, alternative = "greater"))
+  # print(wilcox.test(pos_data$prop_patient, neg_data$prop_patient, alternative = "greater"))
+
+  # wilcoxon
+}
+
+
+
+```
+
+## Initial Logistic Regression Analysis
+
+#### Correlations
+
+```{r correlation plots}
+relevant_data = data %>%
+  select(resolution,
+         size, log10size, 
+         mean_lisi, median_lisi, inverse_simpsons_index, 
+         average_degree, n_unique_subjects, average_clustering, average_degree_norm,
+         prop_patient, 
+         # wasserstein, seq_length_variance,
+         has_close_annotated_sequence0.2) # has_close_annotated_sequence0.2 
+
+# for correlations
+relevant_vars = relevant_data %>%
+  # select(-has_close_annotated_sequence0.2)
+  select(resolution,
+         log10size, 
+         mean_lisi, inverse_simpsons_index, #n_unique_subjects,
+         average_degree, average_clustering, 
+         prop_patient,
+         # wasserstein, seq_length_variance
+         )
+
+
+
+resolutions = unique(relevant_data$resolution)
+
+for (res in resolutions){
+  res_data = relevant_vars %>%
+    filter(resolution == res) %>%
+    select(-resolution)
+  
+  corr_matrix = cor(res_data)
+  print(corrplot(corr_matrix))
+}
+
+```
+
+We notice correlations are very similar for different resolutions. 
+
+```{r median and mean lisi}
+g = ggplot(data=processed_df, aes(x=mean_lisi, y=median_lisi)) +
+  geom_point() + 
+  theme_pub(type="scatter") +
+  labs(title="Median and mean LISI of clusters",
+       x="Mean LISI",
+       y="Median LISI"
+       )
+
+# ggsave("plots/mean_median_lisi.png", plot=g, width=6, height=6, dpi=300)
+
+g
+  
+
+
+```
+
+#### VIFs
+
+```{r model + VIFs}
+# all resolutions
+# resolutions = unique(relevant_data$resolution)
+resolutions = c(1.0, 3.0, 5.0)
+
+for (res in resolutions){
+  res_data = relevant_data %>%
+    filter(resolution == res)
+  
+  # mean_lisi inverse_simpsons_index average_degree average_clustering
+  model <- glm(has_close_annotated_sequence0.2 ~ log10size + inverse_simpsons_index + average_degree + 
+                prop_patient, 
+             data = res_data, family=binomial(link=logit))
+  model2 <- glm(has_close_annotated_sequence0.2 ~ log10size + inverse_simpsons_index + average_clustering +
+              prop_patient, 
+             data = res_data, family=binomial(link=logit))
+  model3 <- glm(has_close_annotated_sequence0.2 ~ log10size + mean_lisi + average_degree + 
+                prop_patient, 
+             data = res_data, family=binomial(link=logit))
+  model4 <- glm(has_close_annotated_sequence0.2 ~ log10size + mean_lisi + average_clustering +
+              prop_patient, 
+             data = res_data, family=binomial(link=logit))
+  
+  print(res)
+  print(vif(model))
+  print(vif(model2))
+  print(vif(model3))
+  print(vif(model4))
+  
+}
+
+```
+
+Nothing too concerning. 
+
+#### Regression results
+
+```{r full list}
+res_list = c(1.0, 2.0, 3.0, 5.0, 8.0, 20.0)
+# res_list = c(1.0)
+# res_list = c(1.0, 3.0, 5.0)
+
+for (res in res_list){
+  res_relevant_data = relevant_data %>%
+    filter(resolution == res)
+  # print(dim(res_relevant_data))
+  
+  model1 <- glm(has_close_annotated_sequence0.2 ~ log10size + mean_lisi + average_degree + prop_patient, 
+               data = res_relevant_data, family=binomial(link=logit))
+  model2 <- glm(has_close_annotated_sequence0.2 ~ log10size + inverse_simpsons_index + average_degree + 
+                                                  prop_patient, 
+               data = res_relevant_data, family=binomial(link=logit))
+  model3 <- glm(has_close_annotated_sequence0.2 ~ log10size + mean_lisi + average_clustering + prop_patient, 
+               data = res_relevant_data, family=binomial(link=logit))
+  model4 <- glm(has_close_annotated_sequence0.2 ~ log10size + inverse_simpsons_index + average_clustering + 
+                                                  prop_patient, 
+               data = res_relevant_data, family=binomial(link=logit))
+  
+  print(res)
+  print(summary(model1))
+  print(summary(model2))
+  print(summary(model3))
+  print(summary(model4))
+  }
+
+```
+
+#### Influential points for basic model
+
+```{r influential point analysis for basic logistic regression}
+res_relevant_data = relevant_data %>%
+  filter(resolution == 3.0)
+print(dim(res_relevant_data))
+
+model <- glm(has_close_annotated_sequence0.2 ~ log10size + mean_lisi + average_degree + prop_patient, 
+             data = res_relevant_data, family=binomial(link=logit))
+model2 <- glm(has_close_annotated_sequence0.2 ~ log10size + inverse_simpsons_index + average_degree + 
+                                                prop_patient, 
+             data = res_relevant_data, family=binomial(link=logit))
+
+print(dim(relevant_data))
+
+model_diag <- glm.diag(model)
+model_diag2 <- glm.diag(model2)
+# glm.diag.plots(model)
+
+# --- cook + leverage analysis --- #
+cook_vec = model_diag$cook
+sorted_cook_vec = sort(cook_vec, decreasing = TRUE)
+cook_vec2 = model_diag2$cook
+sorted_cook_vec2 = sort(cook_vec2, decreasing = TRUE)
+
+lev_vec = model_diag$h
+sorted_lev_vec = sort(lev_vec, decreasing = TRUE)
+lev_vec2 = model_diag2$h
+sorted_lev_vec2 = sort(lev_vec2, decreasing = TRUE)
+
+ranks = (1:length(cook_vec))
+
+# - plot - #
+# plot(x=ranks, y=sorted_cook_vec) # shows 1-2 very big ones
+plot(x=ranks, y=sorted_cook_vec2) # shows 1 very big one (same as before)
+
+# plot(ranks, sorted_lev_vec)
+plot(ranks, sorted_lev_vec2) # has some big ones, be careful.
+
+
+# --- inspect the influential point --- #
+max_id = which.max(cook_vec)
+max_id2 = which.max(cook_vec2) # same as above
+# print(cook_vec[max_id])
+# print(res_relevant_data[max_id,]) # massive size, simpson's, degree
+
+# --- compare model with and without influential point
+res_relevant_data_dropped = res_relevant_data[-c(max_id),]
+
+model_dropped = glm(has_close_annotated_sequence0.2 ~ log10size + mean_lisi + average_degree + prop_patient, 
+             data = res_relevant_data_dropped, family=binomial(link=logit))
+model2_dropped = glm(has_close_annotated_sequence0.2 ~ log10size + inverse_simpsons_index + average_degree + 
+                                                       prop_patient, 
+             data = res_relevant_data_dropped, family=binomial(link=logit))
+
+print(summary(model))
+# print(summary(model_dropped))
+
+print(summary(model2))
+# print(summary(model2_dropped))
+
+# takeaway: coefficients can somewhat change
+
+```
+
+For resolution 1.0, has 1 big cluster that is highly influential. Don't trust the results of this logistic regression very much. Higher resolutions to break up the big cluster. Does it break it up in a way that is helpful for us? (check plot of size and sequence length dist)
+
+```{r MAIN influential_analysis()}
+# function to run analysis on basic logistic regression model
+# with and without influential point dropped
+influential_analysis <- function(data){
+  # other variables: average_degree average_clustering
+  model <- glm(has_close_annotated_sequence0.2 ~ log10size + inverse_simpsons_index + average_degree + prop_patient, 
+             data = res_relevant_data, family=binomial(link=logit))
+  model2 <- glm(has_close_annotated_sequence0.2 ~ log10size + inverse_simpsons_index + average_clustering + 
+                                                prop_patient, 
+             data = res_relevant_data, family=binomial(link=logit))
+  
+  model_diag <- glm.diag(model)
+  model_diag2 <- glm.diag(model2)
+  
+  cook_vec = model_diag$cook
+  sorted_cook_vec = sort(cook_vec, decreasing = TRUE)
+  cook_vec2 = model_diag2$cook
+  sorted_cook_vec2 = sort(cook_vec2, decreasing = TRUE)
+  
+  lev_vec = model_diag$h
+  sorted_lev_vec = sort(lev_vec, decreasing = TRUE)
+  lev_vec2 = model_diag2$h
+  sorted_lev_vec2 = sort(lev_vec2, decreasing = TRUE)
+  
+  ranks = (1:length(cook_vec))
+
+  # - plot - #
+  # plot(x=ranks, y=sorted_cook_vec) # shows 1-2 very big ones
+  # plot(x=ranks, y=sorted_cook_vec2) # shows 1 very big one (same as before)
+  # 
+  # plot(ranks, sorted_lev_vec)
+  # plot(ranks, sorted_lev_vec2) # has some big ones, be careful.
+  
+  # check between taking away highest vs. not. 
+  # does it change sign or significance?
+  
+  max_id = which.max(cook_vec)
+  max_id2 = which.max(cook_vec2) # same as above
+  
+  res_relevant_data_dropped = res_relevant_data[-c(max_id),]
+  res_relevant_data_dropped2 = res_relevant_data[-c(max_id2),]
+  
+  # print("dropped rows")
+  # print(res_relevant_data[max_id,])
+  # print(res_relevant_data[max_id2,])
+
+  # models with variables dropped
+  model_dropped = glm(has_close_annotated_sequence0.2 ~ log10size + inverse_simpsons_index + average_degree + prop_patient,
+               data = res_relevant_data_dropped, family=binomial(link=logit))
+  model2_dropped = glm(has_close_annotated_sequence0.2 ~ log10size + inverse_simpsons_index + average_clustering +
+                                                         prop_patient, 
+               data = res_relevant_data_dropped2, family=binomial(link=logit))
+  
+  print(summary(model))
+  print(summary(model_dropped))
+  
+  print(summary(model2))
+  print(summary(model2_dropped))
+  
+  
+  
+}
+
+```
+
+```{r inspect log reg models for any res list}
+# res_list = c(1.0, 2.0, 3.0, 5.0, 8.0, 20.0)
+# res_list = c(3.0, 5.0, 8.0, 20.0)
+res_list = c(1.0, 2.0, 3.0)
+
+
+for (res in res_list){
+  res_relevant_data = relevant_data %>%
+    filter(resolution == res)
+  # print(dim(res_relevant_data))
+  
+  # model <- glm(has_close_annotated_sequence0.2 ~ log10size + mean_lisi + average_degree + prop_patient, 
+  #              data = res_relevant_data, family=binomial(link=logit))
+  # 
+  # print(dim(relevant_data))
+  
+  print(res)
+  influential_analysis(res_relevant_data) # run function
+}
+
+```
+
+```{r starting to notice negative coefficients on mean lisi and inverse simpson's}
+res_relevant_data = relevant_data %>%
+  filter(resolution == 1.0)
+print(dim(res_relevant_data))
+
+model <- glm(has_close_annotated_sequence0.2 ~ mean_lisi, 
+             data = res_relevant_data, family=binomial(link=logit))
+model2 <- glm(has_close_annotated_sequence0.2 ~ inverse_simpsons_index, 
+             data = res_relevant_data, family=binomial(link=logit))
+
+summary(model)
+summary(model2)
+
+```
+
+Individual analyses below:
+
+```{r res 3.0}
+# expecting fewer influential points; but prediction accuracy may drop. 
+res_relevant_data = relevant_data %>%
+  filter(resolution == 3.0)
+print(dim(res_relevant_data))
+
+influential_analysis(res_relevant_data)
+```
+
+```{r res 5.0}
+# expecting fewer influential points; but prediction accuracy may drop. 
+res_relevant_data = relevant_data %>%
+  filter(resolution == 5.0)
+print(dim(res_relevant_data))
+
+influential_analysis(res_relevant_data)
+```
+
+```{r res 8.0}
+# expecting fewer influential points; but prediction accuracy may drop. 
+res_relevant_data = relevant_data %>%
+  filter(resolution == 8.0)
+print(dim(res_relevant_data))
+
+influential_analysis(res_relevant_data)
+```
+
+```{r res 20.0}
+# expecting fewer influential points; but prediction accuracy may drop. 
+res_relevant_data = relevant_data %>%
+  filter(resolution == 20.0)
+print(dim(res_relevant_data))
+
+influential_analysis(res_relevant_data)
+```
+
+## Penalized Regression
+
+```{r L1/L2 logistic regression}
+# ----- param ----- #
+# res_list = c(1.0, 2.0, 3.0, 5.0, 8.0, 20.0)
+res_list = c(5.0)
+# res = 3.0
+  
+for (res in res_list){
+  # --- filter data --- #
+  res_relevant_data = relevant_data %>%
+    filter(resolution == res) 
+  
+  # --- prep for glmnet --- #
+  # X = res_relevant_data %>%
+  #   select(log10size, mean_lisi, log_average_degree, prop_patient) # log degree
+  # mean_lisi inverse_simpsons_index average_clustering average_degree 
+  X1 = model.matrix(has_close_annotated_sequence0.2 ~ inverse_simpsons_index + log10size + 
+                                                     average_degree + prop_patient,
+                   res_relevant_data)
+  X2 = model.matrix(has_close_annotated_sequence0.2 ~ inverse_simpsons_index + log10size + 
+                                                     average_clustering + prop_patient,
+                   res_relevant_data)
+  y = res_relevant_data$has_close_annotated_sequence0.2
+  n = length(y)
+  
+  # --- plot coefficients vs. lambda (L1, L2) --- #
+  ridge_lambdas = 10^seq(-4, 2, by=0.05)
+  ridge1 <- cv.glmnet(X1, y, family = "binomial", alpha=0, nfolds=10, lambda=ridge_lambdas)   # LOOCV , type.measure = "auc"
+  lasso1 <- cv.glmnet(X1, y, family = "binomial", alpha=1, nfolds=10)   # LOOCV
+  
+  ridge2 <- cv.glmnet(X2, y, family = "binomial", alpha=0, nfolds=10, lambda=ridge_lambdas)   # LOOCV , type.measure = "auc"
+  lasso2 <- cv.glmnet(X2, y, family = "binomial", alpha=1, nfolds=10)   # LOOCV
+  
+  # --- data processing into df --- #
+  ridge1_coefs = coef(ridge1, s = ridge_lambdas)
+  # ridge1_coefs = coef(ridge1, s = ridge1$lambda) # s4 object
+  lasso1_coefs = coef(lasso1, s = lasso1$lambda) # s4 object
+  
+  ridge2_coefs = coef(ridge2, s = ridge_lambdas)
+  lasso2_coefs = coef(lasso2, s = lasso2$lambda) # s4 object
+  
+  # ridge1$lambda.min
+  # ridge1$lambda
+  
+  # manual
+  manual_ridge1_coefs = as.matrix(ridge1_coefs)
+  manual_ridge1_coefs = as.data.frame(t(manual_ridge1_coefs))
+  manual_ridge1_coefs = select(manual_ridge1_coefs, -c("(Intercept)", "(Intercept)"))
+  rownames(manual_ridge1_coefs) <- 1:nrow(manual_ridge1_coefs)
+  manual_ridge1_coefs$lambda = ridge_lambdas
+  # manual_ridge1_coefs$lambda = ridge1$lambda
+  manual_ridge1_coefs$model = "ridge"
+  manual_ridge1_coefs$lambda_min = ridge1$lambda.min
+  
+  manual_lasso1_coefs = as.matrix(lasso1_coefs)
+  manual_lasso1_coefs = as.data.frame(t(manual_lasso1_coefs))
+  manual_lasso1_coefs = select(manual_lasso1_coefs, -c("(Intercept)", "(Intercept)"))
+  rownames(manual_lasso1_coefs) <- 1:nrow(manual_lasso1_coefs)
+  manual_lasso1_coefs$lambda = lasso1$lambda
+  manual_lasso1_coefs$model = "lasso"
+  manual_lasso1_coefs$lambda_min = lasso1$lambda.min
+  
+  manual_ridge2_coefs = as.matrix(ridge2_coefs)
+  manual_ridge2_coefs = as.data.frame(t(manual_ridge2_coefs))
+  manual_ridge2_coefs = select(manual_ridge2_coefs, -c("(Intercept)", "(Intercept)"))
+  rownames(manual_ridge2_coefs) <- 1:nrow(manual_ridge2_coefs)
+  manual_ridge2_coefs$lambda = ridge_lambdas
+  # manual_ridge2_coefs$lambda = ridge1$lambda
+  manual_ridge2_coefs$model = "ridge"
+  manual_ridge2_coefs$lambda_min = ridge2$lambda.min
+  
+  manual_lasso2_coefs = as.matrix(lasso2_coefs)
+  manual_lasso2_coefs = as.data.frame(t(manual_lasso2_coefs))
+  manual_lasso2_coefs = select(manual_lasso2_coefs, -c("(Intercept)", "(Intercept)"))
+  rownames(manual_lasso2_coefs) <- 1:nrow(manual_lasso2_coefs)
+  manual_lasso2_coefs$lambda = lasso2$lambda
+  manual_lasso2_coefs$model = "lasso"
+  manual_lasso2_coefs$lambda_min = lasso2$lambda.min
+  
+  # --- joint df --- #
+  pooled_coefficients1 <- bind_rows(manual_ridge1_coefs, manual_lasso1_coefs) %>%
+    select(-"(Intercept)") %>%
+    # pivot_longer(cols=c("log10size", "mean_lisi", "log_average_degree", "prop_patient"), names_to="variable")
+    pivot_longer(cols=-c("lambda", "model", "lambda_min"), names_to="variable", values_to="coefficient") 
+  
+  pooled_coefficients2 <- bind_rows(manual_ridge2_coefs, manual_lasso2_coefs) %>%
+    select(-"(Intercept)") %>%
+    pivot_longer(cols=-c("lambda", "model", "lambda_min"), names_to="variable", values_to="coefficient") 
+  
+  # head(pooled_coefficients)
+  
+  # --- plot results with ggplot --- #
+  g1 = ggplot(data=pooled_coefficients1, aes(x=lambda, y=coefficient, group=variable, color=variable))+
+    geom_line(alpha=1, linewidth=1)+
+    facet_wrap(~model, ncol=2, scales='free_y')+
+    geom_vline(aes(xintercept = lambda_min), color = pubmediumgray) +
+    # geom_vline(data=lambda.lines, aes(xintercept=lambda.min))+
+    # geom_vline(data=lambda.lines, aes(xintercept=lambda.1se), 
+    #            color = pubmediumgray)+
+    scale_x_log10()+
+    geom_hline(yintercept = 0)+
+    scale_color_manual(values=cb.pal)+
+    theme_pub(type='line')+
+    labs(title=paste0("Ridge and Lasso coefficients (res = ", res, ")"))
+  
+  # ggsave(paste0("plots/coefs/l12_degree_coeffs_", res, ".png"), plot=g1, width=8, height=5)
+  
+  print(g1)
+  
+  g2 = ggplot(data=pooled_coefficients2, aes(x=lambda, y=coefficient, group=variable, color=variable))+
+    geom_line(alpha=1, linewidth=1)+
+    facet_wrap(~model, ncol=2, scales='free_y')+
+    geom_vline(aes(xintercept = lambda_min), color = pubmediumgray) +
+    # geom_vline(data=lambda.lines, aes(xintercept=lambda.min))+
+    # geom_vline(data=lambda.lines, aes(xintercept=lambda.1se), 
+    #            color = pubmediumgray)+
+    scale_x_log10()+
+    geom_hline(yintercept = 0)+
+    scale_color_manual(values=cb.pal)+
+    theme_pub(type='line')+
+    labs(title=paste0("Ridge and Lasso coefficients (res = ", res, ")"))
+  
+  # ggsave(paste0("plots/coefs/l12_clustering_coeffs_", res, ".png"), plot=g2, width=8, height=5)
+  
+  print(g2)
+  
+  
+  pooled_coefficients_mix1 = pooled_coefficients1 %>%
+    filter(variable == "mean_lisi",
+           model == "ridge")
+
+  
+  pooled_coefficients_mix2 = pooled_coefficients2 %>%
+    filter(variable == "inverse_simpsons_index",
+           model == "ridge")
+
+  # --- plot coefficients for specifix variable? --- #
+  gg1 = ggplot(data=pooled_coefficients_mix1, aes(x=lambda, y=coefficient, group=variable))+
+    geom_line(alpha=1, linewidth=1)+
+    # facet_wrap(~variable, ncol=2, scales='free_y')+
+    geom_vline(aes(xintercept = lambda_min), color = pubmediumgray) +
+    # geom_vline(data=lambda.lines, aes(xintercept=lambda.min))+
+    # geom_vline(data=lambda.lines, aes(xintercept=lambda.1se), 
+    #            color = pubmediumgray)+
+    scale_x_log10()+
+    geom_hline(yintercept = 0)+
+    scale_color_manual(values=cb.pal)+
+    theme_pub(type='line')+
+    labs(title=paste0("Mean LISI Coefficient with Ridge Regression (res = ", res, ")"))
+  
+  # ggsave(paste0("plots/coefs/mean_lisi_ridge_coeffs_", res, ".png"), plot=gg1, width=8, height=5)
+  
+  print(gg1)
+  
+  
+  gg2 = ggplot(data=pooled_coefficients_mix2, aes(x=lambda, y=coefficient, group=variable))+
+    geom_line(alpha=1, linewidth=1)+
+    # facet_wrap(~variable, ncol=2, scales='free_y')+
+    geom_vline(aes(xintercept = lambda_min), color = pubmediumgray) +
+    # geom_vline(data=lambda.lines, aes(xintercept=lambda.min))+
+    # geom_vline(data=lambda.lines, aes(xintercept=lambda.1se), 
+    #            color = pubmediumgray)+
+    scale_x_log10()+
+    geom_hline(yintercept = 0)+
+    scale_color_manual(values=cb.pal)+
+    theme_pub(type='line')+
+    labs(title=paste0("Inverse Simpson's Index Coefficient with Ridge Regression (res = ", res, ")"))
+  
+  ggsave(paste0("plots/coefs/inverse_simpsons_ridge_coeffs_", res, ".png"), plot=gg2, width=8, height=5)
+  
+  print(gg2)
+  
+  # - plot error/loss vs. lambda - #
+  # try cross validation with cv.glmnet to get prediction accuracies. dw about splitting train/test cases.
+  plot(ridge1)
+  # plot(lasso1)
+}
+
+
+# - model selection - #
+# print(ridge1$lambda.min)
+# print(lasso1$lambda.min)
+
+```
+
+Ridge min lambda: 0.02238721
+Lasso min lambda: 0.04186541
+
+```{r model summary for closer inspection}
+res = 20.0
+
+# filter data
+res_relevant_data = relevant_data %>%
+  filter(resolution == res) %>%
+  mutate(log_average_degree = log(average_degree))
+
+print(dim(res_relevant_data))
+
+model <- glm(has_close_annotated_sequence0.2 ~ log10size + mean_lisi + average_degree + prop_patient, 
+             data = res_relevant_data, family=binomial(link=logit))
+
+summary(model)
+
+```
+
+
+
+
+
+
+
